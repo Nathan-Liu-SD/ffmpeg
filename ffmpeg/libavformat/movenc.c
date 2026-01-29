@@ -120,6 +120,7 @@ static const AVOption options[] = {
     { "pts", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = MOV_PRFT_SRC_PTS}, 0, 0, AV_OPT_FLAG_ENCODING_PARAM, "prft"},
     { "empty_hdlr_name", "write zero-length name string in hdlr atoms within mdia and minf atoms", offsetof(MOVMuxContext, empty_hdlr_name), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { "movie_timescale", "set movie timescale", offsetof(MOVMuxContext, movie_timescale), AV_OPT_TYPE_INT, {.i64 = MOV_TIMESCALE}, 1, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM},
+    { "update_duration", "update track duration, used in combination with empty_moov", offsetof(MOVMuxContext, update_duration), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { NULL },
 };
 
@@ -3339,6 +3340,9 @@ static int mov_write_mdhd_tag(AVIOContext *pb, MOVMuxContext *mov,
         avio_wb32(pb, track->time); /* modification time */
     }
     avio_wb32(pb, track->timescale); /* time scale (sample rate for audio) */
+    if ((mov->flags & FF_MOV_FLAG_EMPTY_MOOV) && mov->update_duration) {
+        track->mdhd_duration_pos = avio_tell(pb);
+    }
     if (!track->entry && mov->mode == MODE_ISM)
         (version == 1) ? avio_wb64(pb, UINT64_C(0xffffffffffffffff)) : avio_wb32(pb, 0xffffffff);
     else if (!track->entry)
@@ -3442,6 +3446,10 @@ static int mov_write_tkhd_tag(AVIOContext *pb, MOVMuxContext *mov,
     }
     avio_wb32(pb, track->track_id); /* track-id */
     avio_wb32(pb, 0); /* reserved */
+
+    if ((mov->flags & FF_MOV_FLAG_EMPTY_MOOV) && mov->update_duration) {
+        track->tkhd_duration_pos = avio_tell(pb);
+    }
     if (!track->entry && mov->mode == MODE_ISM)
         (version == 1) ? avio_wb64(pb, UINT64_C(0xffffffffffffffff)) : avio_wb32(pb, 0xffffffff);
     else if (!track->entry)
@@ -3929,6 +3937,9 @@ static int mov_write_mvhd_tag(AVIOContext *pb, MOVMuxContext *mov)
         timescale = mov->tracks[0].timescale;
 
     avio_wb32(pb, timescale);
+    if ((mov->flags & FF_MOV_FLAG_EMPTY_MOOV) && mov->update_duration) {
+        mov->duration_pos = avio_tell(pb);
+    }
     (version == 1) ? avio_wb64(pb, max_track_len) : avio_wb32(pb, max_track_len); /* duration of longest track */
 
     avio_wb32(pb, 0x00010000); /* reserved (preferred rate) 1.0 = normal */
@@ -4525,8 +4536,11 @@ static void build_chunks(MOVTrack *trk)
     MOVIentry *chunk = &trk->cluster[0];
     uint64_t chunkSize = chunk->size;
     chunk->chunkNum = 1;
-    if (trk->chunkCount)
-        return;
+    //if (trk->chunkCount)
+    //    return;    
+    for (i = 0; i < trk->entry; i++){
+        trk->cluster[i].samples_in_chunk = trk->cluster[i].entries;
+    }
     trk->chunkCount = 1;
     for (i = 1; i<trk->entry; i++){
         if (chunk->pos + chunkSize == trk->cluster[i].pos &&
@@ -5382,6 +5396,47 @@ done_mfra:
     ffio_free_dyn_buf(&mfra_pb);
 
     return sz;
+}
+
+static int mov_supplement_duration(AVIOContext *pb, MOVMuxContext *mov)
+{
+    int max_track_id = 1, i = 0, version = 0;
+    int64_t max_track_len = 0, cur_pos = 0;
+    cur_pos = avio_tell(pb);
+    /* supplement tracks duration */
+    for (i = 0; i < mov->nb_streams; i++) {
+        //if (mov->tracks[i].entry > 0 && mov->tracks[i].timescale) {
+        if (mov->tracks[i].timescale) {
+            int64_t max_track_len_temp = av_rescale_rnd(
+                                                calc_pts_duration(mov, &mov->tracks[i]),
+                                                mov->movie_timescale,
+                                                mov->tracks[i].timescale,
+                                                AV_ROUND_UP);
+            version = mov_mdhd_mvhd_tkhd_version(mov, &mov->tracks[i], max_track_len_temp);
+            avio_seek(pb, mov->tracks[i].tkhd_duration_pos, SEEK_SET);
+            if (!mov->tracks[i].entry && mov->mode == MODE_ISM)
+                (version == 1) ? avio_wb64(pb, UINT64_C(0xffffffffffffffff)) : avio_wb32(pb, 0xffffffff);
+            else
+                (version == 1) ? avio_wb64(pb, max_track_len_temp) : avio_wb32(pb, max_track_len_temp);
+
+            avio_seek(pb, mov->tracks[i].mdhd_duration_pos, SEEK_SET);
+            if (!mov->tracks[i].entry && mov->mode == MODE_ISM)
+                (version == 1) ? avio_wb64(pb, UINT64_C(0xffffffffffffffff)) : avio_wb32(pb, 0xffffffff);
+            else
+                (version == 1) ? avio_wb64(pb, max_track_len_temp) : avio_wb32(pb, max_track_len_temp);
+
+            if (max_track_len < max_track_len_temp)
+                max_track_len = max_track_len_temp;
+            if (max_track_id < mov->tracks[i].track_id)
+                max_track_id = mov->tracks[i].track_id;
+        }
+    }
+    /* supplement mov duration */
+    version = mov_mdhd_mvhd_tkhd_version(mov, NULL, max_track_len);
+    avio_seek(pb, mov->duration_pos, SEEK_SET);
+    (version == 1) ? avio_wb64(pb, max_track_len) : avio_wb32(pb, max_track_len); /* duration of longest track */
+    
+    return avio_seek(pb, cur_pos, SEEK_SET);     
 }
 
 static int mov_write_mdat_tag(AVIOContext *pb, MOVMuxContext *mov)
@@ -7713,8 +7768,11 @@ static int mov_write_trailer(AVFormatContext *s)
             }
             avio_wb32(pb, size);
             ffio_wfourcc(pb, "free");
-            ffio_fill(pb, 0, size - 8);
-            avio_seek(pb, moov_pos, SEEK_SET);
+            if (!mov->is_init_moov_reserve) {
+                ffio_fill(pb, 0, size - 8);
+                mov->is_init_moov_reserve = 1;
+            }
+	    avio_seek(pb, moov_pos, SEEK_SET);
         } else {
             if ((res = mov_write_moov_tag(pb, mov, s)) < 0)
                 return res;
@@ -7740,6 +7798,8 @@ static int mov_write_trailer(AVFormatContext *s)
             res = mov_write_mfra_tag(pb, mov);
             if (res < 0)
                 return res;
+            if ((mov->flags & FF_MOV_FLAG_EMPTY_MOOV) && mov->update_duration)
+                mov_supplement_duration(pb, mov);
         }
     }
 

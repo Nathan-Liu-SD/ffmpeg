@@ -2423,6 +2423,17 @@ int av_write_uncoded_frame_query(AVFormatContext *s, int stream_index);
 int av_write_trailer(AVFormatContext *s);
 
 /**
+ * Update the stream moov to an output media file and free the
+ * file private data.
+ *
+ * May only be called after a successful call to avformat_write_header.
+ *
+ * @param s media file handle
+ * @return 0 if OK, AVERROR_xxx on error
+ */
+int av_update_moov(AVFormatContext *s);
+
+/**
  * Return the output format in the list of registered output formats
  * which best matches the provided parameters, or return NULL if
  * there is no match.

@@ -169,6 +169,9 @@ typedef struct MOVTrack {
 
     unsigned int squash_fragment_samples_to_one; //< flag to note formats where all samples for a fragment are to be squashed
 
+    int64_t tkhd_duration_pos;
+    int64_t mdhd_duration_pos;
+
     PacketList squashed_packet_queue;
 } MOVTrack;
 
@@ -250,6 +253,9 @@ typedef struct MOVMuxContext {
     int avif_extent_length[2];   // index 0 is YUV and 1 is Alpha.
     int is_animated_avif;
     int avif_loop_count;
+    int update_duration;
+    int64_t duration_pos;
+    int is_init_moov_reserve;
 } MOVMuxContext;
 
 #define FF_MOV_FLAG_RTP_HINT              (1 <<  0)

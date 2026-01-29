@@ -1278,7 +1278,8 @@ int av_interleaved_write_frame(AVFormatContext *s, AVPacket *pkt)
     int ret;
 
     if (pkt) {
-        ret = write_packets_common(s, pkt, 1/*interleaved*/);
+        //ret = write_packets_common(s, pkt, 1/*interleaved*/);
+        ret = write_packets_common(s, pkt, 0);
         if (ret < 0)
             av_packet_unref(pkt);
         return ret;
@@ -1331,6 +1332,40 @@ int av_write_trailer(AVFormatContext *s)
         av_opt_free(s->priv_data);
     av_freep(&s->priv_data);
     av_packet_unref(si->pkt);
+    return ret;
+}
+
+int av_update_moov(AVFormatContext *s)
+{
+    FFFormatContext *const si = ffformatcontext(s);
+    AVPacket *const pkt = si->parse_pkt;
+    int ret1, ret = 0;
+
+    for (unsigned i = 0; i < s->nb_streams; i++) {
+        AVStream *const st  = s->streams[i];
+        FFStream *const sti = ffstream(st);
+        if (sti->bsfc) {
+            ret1 = write_packets_from_bsfs(s, st, pkt, 1/*interleaved*/);
+            if (ret1 < 0)
+                av_packet_unref(pkt);
+            if (ret >= 0)
+                ret = ret1;
+        }
+    }
+    ret1 = interleaved_write_packet(s, pkt, 1, 0);
+    if (ret >= 0)
+        ret = ret1;
+
+    if (ffofmt(s->oformat)->write_trailer) {
+        if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
+            avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_TRAILER);
+        ret1 = ffofmt(s->oformat)->write_trailer(s);
+        if (ret >= 0)
+            ret = ret1;
+    }
+
+    if (s->pb)
+       avio_flush(s->pb);
     return ret;
 }
 
