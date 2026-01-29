@@ -25,7 +25,7 @@
 
 #include <stdint.h>
 #include <inttypes.h>
-
+#include <time.h>
 #include "movenc.h"
 #include "avformat.h"
 #include "avio_internal.h"
@@ -120,6 +120,7 @@ static const AVOption options[] = {
     { "pts", NULL, 0, AV_OPT_TYPE_CONST, {.i64 = MOV_PRFT_SRC_PTS}, 0, 0, AV_OPT_FLAG_ENCODING_PARAM, "prft"},
     { "empty_hdlr_name", "write zero-length name string in hdlr atoms within mdia and minf atoms", offsetof(MOVMuxContext, empty_hdlr_name), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { "movie_timescale", "set movie timescale", offsetof(MOVMuxContext, movie_timescale), AV_OPT_TYPE_INT, {.i64 = MOV_TIMESCALE}, 1, INT_MAX, AV_OPT_FLAG_ENCODING_PARAM},
+    { "apple_certification_define", "mov apple certification", offsetof(MOVMuxContext, apple_certification_define), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { "update_duration", "update track duration, used in combination with empty_moov", offsetof(MOVMuxContext, update_duration), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_ENCODING_PARAM},
     { NULL },
 };
@@ -2317,13 +2318,21 @@ static int mov_write_video_tag(AVFormatContext *s, AVIOContext *pb, MOVMuxContex
     }
     avio_wb16(pb, 0); /* Codec stream revision (=0) */
     if (track->mode == MODE_MOV) {
-        ffio_wfourcc(pb, "FFMP"); /* Vendor */
+        if (mov->apple_certification_define)
+            ffio_wfourcc(pb, "appl"); /* Vendor */
+        else
+            ffio_wfourcc(pb, "FFMP"); /* Vendor */
         if (track->par->codec_id == AV_CODEC_ID_RAWVIDEO || uncompressed_ycbcr) {
             avio_wb32(pb, 0); /* Temporal Quality */
             avio_wb32(pb, 0x400); /* Spatial Quality = lossless*/
         } else {
-            avio_wb32(pb, 0x200); /* Temporal Quality = normal */
-            avio_wb32(pb, 0x200); /* Spatial Quality = normal */
+            if (mov->apple_certification_define) {
+                avio_wb32(pb, 0);
+                avio_wb32(pb, 0x3ff);
+            } else {
+                avio_wb32(pb, 0x200); /* Temporal Quality = normal */
+                avio_wb32(pb, 0x200); /* Spatial Quality = normal */
+            }
         }
     } else {
         ffio_fill(pb, 0, 3 * 4); /* Reserved */
@@ -7278,8 +7287,14 @@ static int mov_init(AVFormatContext *s)
                     av_log(s, AV_LOG_WARNING, "Warning: some tools, like mp4split, assume a timescale of 10000000 for ISMV.\n");
             } else {
                 track->timescale = st->time_base.den;
-                while(track->timescale < 10000)
-                    track->timescale *= 2;
+                if (!mov->apple_certification_define) {
+                    while(track->timescale < 10000)
+                        track->timescale *= 2;
+                } else {
+                    if (track->timescale < 1000) {
+                        track->timescale *= 100;
+                    }
+                }
             }
             if (st->codecpar->width > 65535 || st->codecpar->height > 65535) {
                 av_log(s, AV_LOG_ERROR, "Resolution %dx%d too large for mov/mp4\n", st->codecpar->width, st->codecpar->height);
@@ -7537,6 +7552,11 @@ static int mov_write_header(AVFormatContext *s)
     ff_parse_creation_time_metadata(s, &mov->time, 1);
     if (mov->time)
         mov->time += 0x7C25B080; // 1970 based -> 1904 based
+    else {
+        time_t raw_time;
+        time(&raw_time);
+        mov->time = raw_time + 0x7C25B080;  // 1970 -> 1904
+    }
 
     if (mov->chapter_track)
         if ((ret = mov_create_chapter_track(s, mov->chapter_track)) < 0)

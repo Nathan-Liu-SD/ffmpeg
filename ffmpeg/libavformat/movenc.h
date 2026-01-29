@@ -253,6 +253,7 @@ typedef struct MOVMuxContext {
     int avif_extent_length[2];   // index 0 is YUV and 1 is Alpha.
     int is_animated_avif;
     int avif_loop_count;
+    int apple_certification_define;
     int update_duration;
     int64_t duration_pos;
     int is_init_moov_reserve;
