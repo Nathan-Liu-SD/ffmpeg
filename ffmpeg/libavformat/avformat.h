@@ -1714,6 +1714,11 @@ typedef struct AVFormatContext {
      */
     int max_probe_packets;
 
+    /* Customize data */
+    int first_partition_pos;
+    int index_table_pos;
+    int only_update_index_table;
+
     /**
      * A callback for closing the streams opened with AVFormatContext.io_open().
      *
@@ -2432,6 +2437,17 @@ int av_write_trailer(AVFormatContext *s);
  * @return 0 if OK, AVERROR_xxx on error
  */
 int av_update_moov(AVFormatContext *s);
+
+/**
+ * Update the stream index infos to an output media file and free the
+ * file private data.
+ *
+ * May only be called after a successful call to avformat_write_header.
+ *
+ * @param s media file handle
+ * @return 0 if OK, AVERROR_xxx on error
+ */
+int av_update_mxf_index_infos(AVFormatContext *s);
 
 /**
  * Return the output format in the list of registered output formats

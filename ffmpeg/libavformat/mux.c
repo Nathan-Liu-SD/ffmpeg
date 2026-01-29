@@ -1369,6 +1369,23 @@ int av_update_moov(AVFormatContext *s)
     return ret;
 }
 
+int av_update_mxf_index_infos(AVFormatContext *s)
+{
+    int ret1, ret = 0;
+
+    s->only_update_index_table = 1;
+    if (ffofmt(s->oformat)->write_trailer) {
+        ret1 = ffofmt(s->oformat)->write_trailer(s);
+        if (ret >= 0)
+            ret = ret1;
+    }
+    s->only_update_index_table = 0;
+
+    if (s->pb)
+       avio_flush(s->pb);
+    return ret;
+}
+
 int av_get_output_timestamp(struct AVFormatContext *s, int stream,
                             int64_t *dts, int64_t *wall)
 {

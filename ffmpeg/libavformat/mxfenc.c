@@ -1938,6 +1938,15 @@ static unsigned klv_fill_size(uint64_t size)
         return pad & (KAG_SIZE-1);
 }
 
+static void mxf_write_klv_fill_null(AVFormatContext *s, int length)
+{
+    unsigned char *buf;
+    buf = av_malloc(length);
+    memset(buf, 0, length);
+    avio_write(s->pb, buf, length);
+    free(buf);
+}
+
 static void mxf_write_index_table_segment(AVFormatContext *s)
 {
     MXFContext *mxf = s->priv_data;
@@ -3253,10 +3262,12 @@ static int mxf_write_packet(AVFormatContext *s, AVPacket *pkt)
         return mxf_write_opatom_packet(s, pkt, &ie);
 
     if (!mxf->header_written) {
+        s->first_partition_pos = avio_tell(pb);
         if (mxf->edit_unit_byte_count) {
             if ((err = mxf_write_partition(s, 1, 2, header_open_partition_key, 1)) < 0)
                 return err;
             mxf_write_klv_fill(s);
+            s->index_table_pos = avio_tell(pb);
             mxf_write_index_table_segment(s);
         } else {
             if ((err = mxf_write_partition(s, 0, 0, header_open_partition_key, 1)) < 0)
@@ -3353,6 +3364,26 @@ static int mxf_write_footer(AVFormatContext *s)
     }
 
     mxf->duration = mxf->last_indexed_edit_unit + mxf->edit_units_count;
+    if (s->only_update_index_table) {
+        int64_t cur_pos = avio_tell(pb);        
+        if (mxf->edit_unit_byte_count) {
+            avio_seek(pb, s->first_partition_pos, SEEK_SET);
+            if ((err = mxf_write_partition(s, 1, 2, header_open_partition_key, 1)) < 0)
+                return err;
+            mxf_write_klv_fill(s);
+            if (s->index_table_pos > 0) {
+                avio_seek(pb, s->index_table_pos, SEEK_SET);
+                mxf_write_index_table_segment(s);        
+            }
+        } else {
+            if ((err = mxf_write_partition(s, 1, 2, header_open_partition_key, 1)) < 0)
+                return err;
+            mxf_write_klv_fill(s);
+        }       
+        
+        avio_seek(pb, cur_pos, SEEK_SET);
+        return 0;
+    }
 
     mxf_write_klv_fill(s);
     mxf->footer_partition_offset = avio_tell(pb);
